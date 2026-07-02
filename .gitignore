@@ -1,0 +1,29 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!example.tfvars
+backend.hcl
+crash.log
+
+# Rendered / env-specific
+*.rendered.yaml
+*.rendered.json
+kubeconfig*
+
+# Secrets / credentials
+*.secret
+*.pem
+*.key
+*-password.txt
+
+# Helm
+charts/**/charts/
+*.tgz
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.log
