@@ -1,0 +1,6 @@
+apiVersion: v2
+name: notes
+description: Notes API for the S3 multi-region DR demo
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

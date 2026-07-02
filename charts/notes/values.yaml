@@ -1,0 +1,35 @@
+image:
+  repository: ""      # <acr-login-server>/notes
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+# Region label shown by the app + whether this release is the read-only DR copy.
+region: "unknown"
+readOnly: false
+
+pg:
+  host: ""
+  port: 5432
+  user: "pgadmin"
+  database: "notes"
+  password: ""        # supply via --set pg.password=... (from terraform output)
+
+service:
+  port: 80
+
+ingress:
+  enabled: true
+  className: nginx
+  host: ""            # app-<ingress-ip>.sslip.io
+  clusterIssuer: letsencrypt-prod
+  tls: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi

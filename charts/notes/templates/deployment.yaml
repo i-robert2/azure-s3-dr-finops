@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notes
+  labels:
+    app: notes
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: notes
+  template:
+    metadata:
+      labels:
+        app: notes
+    spec:
+      containers:
+        - name: notes
+          image: "{{ .Values.image.repository }}/notes:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: REGION
+              value: {{ .Values.region | quote }}
+            - name: READ_ONLY
+              value: {{ .Values.readOnly | quote }}
+            - name: PGHOST
+              value: {{ .Values.pg.host | quote }}
+            - name: PGPORT
+              value: {{ .Values.pg.port | quote }}
+            - name: PGUSER
+              value: {{ .Values.pg.user | quote }}
+            - name: PGDATABASE
+              value: {{ .Values.pg.database | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: notes-db
+                  key: PGPASSWORD
+          readinessProbe:
+            httpGet:
+              path: /api/healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+{{ toYaml .Values.resources | indent 12 }}

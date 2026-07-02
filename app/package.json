@@ -1,0 +1,13 @@
+{
+  "name": "notes-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal notes API for the S3 multi-region DR demo",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "pg": "^8.12.0"
+  }
+}
