@@ -62,12 +62,15 @@ flowchart TB
 
 ```
 terraform/
-  shared/        Premium ACR (geo-replicated) + Front Door Standard + Cost Management budget
-  primary/       primary stack: RG, VNet, AKS, Postgres primary, Key Vault
+  shared/        Premium ACR (geo-replicated) + Cost Management budget
+  primary/       primary stack: RG, VNet, AKS, Postgres primary (public+fw), Key Vault
   dr/            DR stack: RG, VNet, AKS, Postgres read replica, Key Vault
-charts/notes/    app Helm chart, parameterized by region (READ_ONLY flag for DR)
+  frontdoor/     Front Door Standard: endpoint, origin group, two priority origins, route
+app/             notes API (Node + pg): /api/healthz, /api/whoami, /api/notes (READ_ONLY gate)
+charts/notes/    app Helm chart, parameterized by region (readOnly flag for DR)
+k8s/             Let's Encrypt ClusterIssuer (applied to both clusters)
 scripts/
-  dr-drill.ps1     block primary ingress → measure RTO/RPO → restore → postmortem
+  dr-drill.ps1     scale primary to 0 → measure RTO/RPO via Front Door → restore → postmortem
   finops-report.ps1  pull Cost Management data → tag breakdown → recommendations
   promote-replica.sh manual Postgres replica → standalone promotion
 docs/
@@ -116,7 +119,7 @@ terraform apply
 **4 — Deploy the app to both clusters**
 ```powershell
 helm --kube-context primary upgrade --install notes ./charts/notes -n app --create-namespace  # read-write
-helm --kube-context dr      upgrade --install notes ./charts/notes -n app --create-namespace --set api.readOnly=true
+helm --kube-context dr      upgrade --install notes ./charts/notes -n app --create-namespace --set readOnly=true
 ```
 
 **5 — Run the DR drill (measure) and the FinOps report**
@@ -136,7 +139,17 @@ helm --kube-context dr      upgrade --install notes ./charts/notes -n app --crea
 | Replica → standalone promotion | ≤ 10 min | `promote-replica.sh` wall-clock |
 | User-facing `5xx` window | minimal | Continuous probing through Front Door during cutover |
 
-The drill script **blocks the primary ingress** (NSG rule), watches Front Door fail over, promotes the replica, then **restores** the NSG — it is idempotent and self-cleaning, so an aborted run never leaves a stuck rule. Every run emits a dated postmortem with a **5-Whys** on the worst `5xx` window.
+The drill script injects a fault by **scaling the primary `notes` deployment to 0** (its ingress then fails Front Door's `/api/healthz` probe), watches Front Door fail over to DR, checks a marker row on the replica, then **restores** the primary — it is idempotent and self-cleaning (a `finally` block scales the primary back up even if aborted). Every run emits a dated postmortem with a **5-Whys**.
+
+### Measured run (2026-07-03)
+
+| Metric | Target | **Measured** |
+|---|---|---|
+| RTO — Front Door failover to DR | ≤ 15 min | **17.2 s** |
+| RPO — marker row on replica at cutover | ≤ 5 min | **replicated — ~0 loss** |
+| Time to restore primary serving | — | **17.7 s** |
+
+Full postmortem: [docs/DR-DRILL-2026-07-03.md](docs/DR-DRILL-2026-07-03.md).
 
 ---
 
@@ -204,6 +217,17 @@ The report pulls Cost Management data, breaks spend down by the `project` / `cos
 > Front Door **Premium** (managed WAF, bot rules) is ~280 USD/mo — this lab uses **Standard** (same routing/failover flow) and documents the trade-off in an ADR, exactly as you'd justify it in a real cost review.
 
 `terraform destroy` in `dr` → `primary` → `shared`, then confirm no `rg-s3-*` groups remain → spend returns to ~€0.
+
+---
+
+## Issues we hit (and how we fixed them)
+
+- **Only one viable EU region pair.** This subscription can run the required `Standard_B2s_v2` nodes in **`swedencentral`** and **`polandcentral`** only — West Europe is `NotAvailableForSubscription`, and North Europe / Germany / Norway / Italy / UK don't offer `B2s_v2` at all. So the DR pair is `swedencentral` (primary) + `polandcentral` (DR), verified by a `az vm list-skus` scan before provisioning.
+- **Read replicas need GeneralPurpose, not Burstable.** Postgres Flexible Burstable tier can't be a replica *source*, so the primary runs `GP_Standard_D2s_v3` (the smallest GP SKU available in both regions).
+- **Private cross-region replica was blocked.** A VNet-integrated (private) replica in Poland couldn't reach the private primary in Sweden — `ReadReplicaToSourceServerNetworkBlocked`, because the two regional VNets aren't peered. Rather than add cross-region VNet peering + dual private-DNS links (fragile), both servers use **public access restricted to Azure services** (`AllowAzureServices` firewall rule, `0.0.0.0-0.0.0.0`) — the standard, reliable pattern for cross-region replicas. Documented as a deliberate trade-off.
+- **Front Door first-deploy propagation is slow.** After `terraform apply`, the endpoint returned `404` (`X-Cache: CONFIG_NOCACHE`) for ~25 minutes before the route reached the edge — even though the control plane showed everything `Enabled`. It's propagation, not misconfiguration; once live, health-probe failover is fast (**17.2 s** measured).
+- **AKS can't be reconfigured mid-start.** Re-applying the primary stack while `az aks start` was still running returned `409 OperationNotAllowed`. Wait for the start operation to finish, then apply.
+- **Interrupted apply leaves a state lock.** A `terraform apply` cut off mid-run left a stale blob lease; `terraform force-unlock <id>` clears it.
 
 ---
 
